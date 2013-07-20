@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 2.6) 
+project(live_fft)
+find_package(PkgConfig REQUIRED)
+add_executable(live_fft live_fft.c)
+pkg_check_modules(GTK gtk+-3.0)
+include_directories(${GTK_INCLUDE_DIRS})
+target_link_libraries(live_fft ${GTK_LIBRARIES})
+set(CMAKE_C_FLAGS "-Wall -std=c99")
