@@ -2,9 +2,9 @@
 #define FFT_SIZE 4800
 
 #define H_LOGARITHMIC 1
-#define H_GRID_TYPE 2 // 0 = no grid. 1 = linear grid. 2 = fixed logarithmic grid. 3 = piano keys
-#define H_MIN 10
-#define H_MAX 24000 // Hz
+#define H_GRID_TYPE 3 // 0 = no grid. 1 = linear grid. 2 = fixed logarithmic grid. 3 = piano keys
+#define H_MIN 100
+#define H_MAX 1000 // Hz
 #define H_GRID 500
 
 #define V_LOGARITHMIC 1
@@ -16,25 +16,12 @@
 #define V_LOG_MIN -120
 #define V_LOG_GRID 10
 
+#define MARGIN 4
+
 // TODO there are lots of return codes we should check & possible errors we
 // should handle
 
-/*
-TODO features:
-
-Set window function
-Set FFT rate/overlap
-
-Vertical and horizontal gridlines:
-
-Vertical gridlines will always be at fixed linear steps on linear scale, or fixed dB steps on log scale
-
-Horizontal gridlines can be either:
-	Linear (Hz)
-	Fixed log 10, 100, 1000 Hz
-	Piano keys
-	and you can select either of those with either scale
-*/
+// TODO a configuration interface
 
 #define _XOPEN_SOURCE
 
@@ -109,9 +96,19 @@ void hline(cairo_t *cr, int width, int height, double y, char *label) {
 	cairo_move_to(cr,0,py);
 	cairo_line_to(cr,width,py);
 	cairo_stroke(cr);
-	cairo_move_to(cr,2,py-4);
-	cairo_show_text(cr,buf);
+
+	// Draw label
+	cairo_text_extents_t extents;
+	cairo_text_extents(cr,label,&extents);
+	double baseline = py+3;
+	double tx = 5;
+	double top = baseline+extents.y_bearing;
+	cairo_set_source_rgb(cr,1,1,1);
+	cairo_rectangle(cr,tx+extents.x_bearing-MARGIN,top-MARGIN,extents.width+2*MARGIN,extents.height+2*MARGIN);
 	cairo_fill(cr);
+	cairo_set_source_rgb(cr,0,0,0);
+	cairo_move_to(cr,tx,baseline);
+	cairo_show_text(cr,label);
 }
 
 void draw_v_grid(cairo_t *cr, int width, int height) {
@@ -149,10 +146,20 @@ void vline(cairo_t *cr, int width, int height, double x, char *label) {
 	cairo_move_to(cr,px,0);
 	cairo_line_to(cr,px,height);
 	cairo_stroke(cr);
-	cairo_move_to(cr,px,height-2);
-	cairo_show_text(cr,buf);
+	// Draw label
+	double ty = height-10;
+	cairo_text_extents_t extents;
+	cairo_text_extents(cr,label,&extents);
+	double top = ty+extents.y_bearing;
+	cairo_set_source_rgb(cr,1,1,1);
+	cairo_rectangle(cr,px-extents.width/2-MARGIN,top-MARGIN,extents.width+2*MARGIN,extents.height+2*MARGIN);
 	cairo_fill(cr);
+	cairo_set_source_rgb(cr,0,0,0);
+	cairo_move_to(cr,px-extents.width/2-extents.x_bearing,ty);
+	cairo_show_text(cr,label);
 }
+
+const char *notename[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 
 void draw_h_grid(cairo_t *cr, int width, int height) {
 	cairo_set_source_rgb(cr,0,0,0);
@@ -183,6 +190,12 @@ void draw_h_grid(cairo_t *cr, int width, int height) {
 	case 3:
 		// Piano keys
 		// TODO
+		for (int i=0;i<128;i++) {
+			double freq = 440 * pow(2,(i-69)/12.);
+			char buf[20];
+			snprintf(buf,20,"%s%d",notename[i%12],i/12-1);
+			vline(cr,width,height,freq,buf);
+		}
 		break;
 	}
 }
@@ -244,7 +257,7 @@ int main(int argc, char **argv) {
 	// Create pulseaudio context
 	pa_glib_mainloop *pgm = pa_glib_mainloop_new(NULL);
 	pa_mainloop_api *pma = pa_glib_mainloop_get_api(pgm);
-	pa_context *ctx = pa_context_new(pma,"live FFT");
+	pa_context *ctx = pa_context_new(pma,"Live spectrum display");
 	pa_context_set_state_callback(ctx,audio_connected_callback,window);
 	pa_context_connect(ctx,NULL,0,NULL);
 
