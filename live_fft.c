@@ -1,11 +1,11 @@
 #define SAMPLE_RATE 48000
 #define FFT_SIZE 4800
 
-#define H_LOGARITHMIC 1
-#define H_GRID_TYPE 3 // 0 = no grid. 1 = linear grid. 2 = fixed logarithmic grid. 3 = piano keys
-#define H_MIN 100
-#define H_MAX 1000 // Hz
-#define H_GRID 500
+#define H_LOGARITHMIC 0
+#define H_GRID_TYPE 1 // 0 = no grid. 1 = linear grid. 2 = fixed logarithmic grid. 3 = piano keys
+#define H_MIN 0
+#define H_MAX 24000 // Hz
+#define H_GRID 1000
 
 #define V_LOGARITHMIC 1
 #define V_SHOW_GRID 1
@@ -249,6 +249,8 @@ gboolean draw(GtkWidget *window, cairo_t *cr, gpointer dummy) {
 int main(int argc, char **argv) {
 	gtk_init(&argc,&argv);
 	GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+	gtk_window_set_title(GTK_WINDOW(window),"Live spectrum display");
+	gtk_window_set_default_size(GTK_WINDOW(window),640,480);
 	g_signal_connect(window,"destroy",gtk_main_quit,NULL);
 	g_signal_connect(window,"draw",G_CALLBACK(draw),NULL);
 	gtk_widget_set_app_paintable(window,TRUE);
@@ -257,7 +259,7 @@ int main(int argc, char **argv) {
 	// Create pulseaudio context
 	pa_glib_mainloop *pgm = pa_glib_mainloop_new(NULL);
 	pa_mainloop_api *pma = pa_glib_mainloop_get_api(pgm);
-	pa_context *ctx = pa_context_new(pma,"Live spectrum display");
+	pa_context *ctx = pa_context_new(pma,"Live spectrum");
 	pa_context_set_state_callback(ctx,audio_connected_callback,window);
 	pa_context_connect(ctx,NULL,0,NULL);
 
