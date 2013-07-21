@@ -265,7 +265,7 @@ int main(int argc, char **argv) {
 
 	// Set up FFT
 	fft_in_buffer = fftwf_malloc(sizeof(float)*FFT_SIZE);
-	fft_out_buffer = fftwf_malloc(sizeof(fftwf_complex)*FFT_SIZE);
+	fft_out_buffer = fftwf_malloc(sizeof(fftwf_complex)*(FFT_SIZE/2+1));
 	plan = fftwf_plan_dft_r2c_1d(FFT_SIZE,fft_in_buffer,fft_out_buffer,FFTW_ESTIMATE);
 
 	gtk_main();
