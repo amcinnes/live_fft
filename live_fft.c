@@ -15,11 +15,11 @@
 
 // #define PITCH_WINDOW_SIZE 4096
 #define PITCH_WINDOW_SPACING 1024
-#define PITCH_POINTS 100
+#define PITCH_POINTS 1000
 
 #define PITCH_GRID_TYPE 3
 #define PITCH_GRID 50
-#define PITCH_MIN 10
+#define PITCH_MIN 50
 #define PITCH_MAX 400
 #define PITCH_LOGARITHMIC 1
 
@@ -85,14 +85,18 @@ void audio_read_callback(pa_stream *stream, size_t n, void *dummy) {
 	const void *data;
 	pa_stream_peek(stream,&data,&nread);
 
-	// TODO handle window spacing properly
-
 	int stream_pos = 0;
 	while (stream_pos<nread) {
 		int space_in_window = window_size*sizeof(float)-in_pos;
 		int data_in_buffer = nread-stream_pos;
 		int to_copy = data_in_buffer>space_in_window?space_in_window:data_in_buffer;
-		memcpy(((void *)window_buffer)+in_pos,data+stream_pos,to_copy);
+		if (in_pos<0) {
+			if (in_pos+to_copy>0) {
+				memcpy(window_buffer,data+stream_pos-in_pos,to_copy+in_pos);
+			}
+		} else {
+			memcpy(((void *)window_buffer)+in_pos,data+stream_pos,to_copy);
+		}
 		stream_pos += to_copy;
 		in_pos += to_copy;
 		if (in_pos==window_size*sizeof(float)) {
@@ -104,7 +108,10 @@ void audio_read_callback(pa_stream *stream, size_t n, void *dummy) {
 				pitch_process_window();
 				break;
 			}
-			in_pos = 0;
+			if (window_spacing<window_size) {
+				memmove(window_buffer,window_buffer+window_spacing,(window_size-window_spacing)*sizeof(float));
+			}
+			in_pos -= window_spacing*sizeof(float);
 		}
 	}
 
@@ -320,6 +327,14 @@ void pitchline(cairo_t *cr, int width, int height, double y, char *label) {
 	double baseline = py+3;
 	double tx = 5;
 	double top = baseline+extents.y_bearing;
+	cairo_set_source_rgb(cr,1,1,1);
+	cairo_rectangle(cr,tx+extents.x_bearing-MARGIN,top-MARGIN,extents.width+2*MARGIN,extents.height+2*MARGIN);
+	cairo_fill(cr);
+	cairo_set_source_rgb(cr,0,0,0);
+	cairo_move_to(cr,tx,baseline);
+	cairo_show_text(cr,label);
+
+	tx = width - extents.width - 5;
 	cairo_set_source_rgb(cr,1,1,1);
 	cairo_rectangle(cr,tx+extents.x_bearing-MARGIN,top-MARGIN,extents.width+2*MARGIN,extents.height+2*MARGIN);
 	cairo_fill(cr);
