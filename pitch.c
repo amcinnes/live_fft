@@ -29,10 +29,12 @@ void pitch_init() {
 }
 
 int find_max(float *b, int length, float threshold) {
-	// First, find the maximum of the whole array
+	// First, find the maximum of the whole array after the first zero crossing
 	float max_value = 0;
+	int crossed = 0;
 	for (int i=0;i<length;i++) {
-		if (b[i]>max_value) max_value = b[i];
+		if (b[i]<0) crossed = 1;
+		if (crossed && b[i]>max_value) max_value = b[i];
 	}
 	// Find the first maximum which is within threshold of it
 	int max = -1;

@@ -397,9 +397,13 @@ gboolean draw_pitch(GtkWidget *window, cairo_t *cr, gpointer dummy) {
 		} else {
 			y = height*(1-(pitch[i]-PITCH_MIN)/(PITCH_MAX-PITCH_MIN));
 		}
-		if (line_exists && clarity[i]>0) cairo_line_to(cr,x,y);
-		else if (clarity[i]>0) cairo_move_to(cr,x,y);
-		line_exists = (clarity[i]>0);
+		if (clarity[i]>0 && y>0 && y<height) {
+			if (line_exists) cairo_line_to(cr,x,y);
+			else cairo_move_to(cr,x,y);
+			line_exists = 1;
+		} else {
+			line_exists = 0;
+		}
 	}
 	cairo_set_source_rgb(cr,0,0,1);
 	cairo_set_line_width(cr,2);
