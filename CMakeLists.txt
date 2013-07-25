@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 2.6) 
 project(live_fft)
 find_package(PkgConfig REQUIRED)
-add_executable(live_fft live_fft.c)
+add_executable(live_fft live_fft.c pitch.c)
 pkg_check_modules(GTK gtk+-3.0)
 pkg_check_modules(PULSE libpulse)
 pkg_check_modules(PULSE_GLIB libpulse-mainloop-glib)

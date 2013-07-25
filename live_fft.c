@@ -1,10 +1,27 @@
-#define SAMPLE_RATE 48000
+#include <string.h>
+#include <math.h>
+#include <complex.h>
+#include <gtk/gtk.h>
+#include <pulse/pulseaudio.h>
+#include <pulse/glib-mainloop.h>
+#include <fftw3.h>
+#include "pitch.h"
+
+// SAMPLE_RATE and PITCH_WINDOW_SIZE are, for the moment, in pitch.h
+
+// #define SAMPLE_RATE 48000
 #define FFT_WINDOW_SIZE 4800
 #define FFT_WINDOW_SPACING 4800
 
-#define PITCH_WINDOW_SIZE 4096
+// #define PITCH_WINDOW_SIZE 4096
 #define PITCH_WINDOW_SPACING 1024
-#define PITCH_POINTS 1000
+#define PITCH_POINTS 100
+
+#define PITCH_GRID_TYPE 3
+#define PITCH_GRID 50
+#define PITCH_MIN 10
+#define PITCH_MAX 400
+#define PITCH_LOGARITHMIC 1
 
 #define H_LOGARITHMIC 0
 #define H_GRID_TYPE 1 // 0 = no grid. 1 = linear grid. 2 = fixed logarithmic grid. 3 = piano keys
@@ -23,52 +40,70 @@
 
 #define MARGIN 4
 
-enum {
-	MODE_FFT = 0,
-	MODE_PITCH = 1
-};
+#define _XOPEN_SOURCE
 
 // TODO there are lots of return codes we should check & possible errors we
 // should handle
 
 // TODO a configuration interface
 
-#define _XOPEN_SOURCE
+enum {
+	MODE_FFT = 0,
+	MODE_PITCH = 1
+};
 
-#include <string.h>
-#include <math.h>
-#include <complex.h>
-#include <gtk/gtk.h>
-#include <pulse/pulseaudio.h>
-#include <pulse/glib-mainloop.h>
-#include <fftw3.h>
+int mode;
+float *window_buffer;
+int in_pos;
+int window_size, window_spacing;
 
 fftwf_plan plan;
 float *fft_in_buffer;
 fftwf_complex *fft_out_buffer;
-int in_pos;
-int window_size, window_spacing;
 int fft_valid;
-int mode;
-double clarity[PITCH_POINTS];
+GtkWidget *fft_da;
 
-void audio_read_callback(pa_stream *stream, size_t n, void *window) {
+float clarity[PITCH_POINTS];
+float pitch[PITCH_POINTS];
+GtkWidget *pitch_da;
+
+void fft_process_window() {
+	fftwf_execute(plan);
+	fft_valid = 1;
+	gtk_widget_queue_draw(GTK_WIDGET(fft_da));
+}
+
+void pitch_process_window() {
+	memmove(clarity,clarity+1,(PITCH_POINTS-1)*sizeof(float));
+	memmove(pitch,pitch+1,(PITCH_POINTS-1)*sizeof(float));
+	pitch_calculate(&pitch[PITCH_POINTS-1],&clarity[PITCH_POINTS-1]);
+	gtk_widget_queue_draw(GTK_WIDGET(pitch_da));
+}
+
+void audio_read_callback(pa_stream *stream, size_t n, void *dummy) {
 	size_t nread;
 	const void *data;
 	pa_stream_peek(stream,&data,&nread);
 
+	// TODO handle window spacing properly
+
 	int stream_pos = 0;
 	while (stream_pos<nread) {
-		int space_in_fft = FFT_WINDOW_SIZE*sizeof(float)-in_pos;
+		int space_in_window = window_size*sizeof(float)-in_pos;
 		int data_in_buffer = nread-stream_pos;
-		int to_copy = data_in_buffer>space_in_fft?space_in_fft:data_in_buffer;
-		memcpy(((void *)fft_in_buffer)+in_pos,data+stream_pos,to_copy);
+		int to_copy = data_in_buffer>space_in_window?space_in_window:data_in_buffer;
+		memcpy(((void *)window_buffer)+in_pos,data+stream_pos,to_copy);
 		stream_pos += to_copy;
 		in_pos += to_copy;
-		if (in_pos==FFT_WINDOW_SIZE*sizeof(float)) {
-			fftwf_execute(plan);
-			fft_valid = 1;
-			gtk_widget_queue_draw(GTK_WIDGET(window));
+		if (in_pos==window_size*sizeof(float)) {
+			switch (mode) {
+			case MODE_FFT:
+				fft_process_window();
+				break;
+			case MODE_PITCH:
+				pitch_process_window();
+				break;
+			}
 			in_pos = 0;
 		}
 	}
@@ -204,7 +239,6 @@ void draw_h_grid(cairo_t *cr, int width, int height) {
 		break;
 	case 3:
 		// Piano keys
-		// TODO
 		for (int i=0;i<128;i++) {
 			double freq = 440 * pow(2,(i-69)/12.);
 			char buf[20];
@@ -264,52 +298,97 @@ gboolean draw_fft(GtkWidget *window, cairo_t *cr, gpointer dummy) {
 	return FALSE;
 }
 
+void pitchline(cairo_t *cr, int width, int height, double y, char *label) {
+	char buf[20];
+	if (label==NULL) {
+		snprintf(buf,20,"%.0lf",y);
+		label = buf;
+	}
+	double py;
+	if (PITCH_LOGARITHMIC) {
+		py = height*(1-(log(y)-log(PITCH_MIN))/(log(PITCH_MAX)-log(PITCH_MIN)));
+	} else {
+		py = height*(1-(y-PITCH_MIN)/(PITCH_MAX-PITCH_MIN));
+	}
+	cairo_move_to(cr,0,py);
+	cairo_line_to(cr,width,py);
+	cairo_stroke(cr);
+
+	// Draw label
+	cairo_text_extents_t extents;
+	cairo_text_extents(cr,label,&extents);
+	double baseline = py+3;
+	double tx = 5;
+	double top = baseline+extents.y_bearing;
+	cairo_set_source_rgb(cr,1,1,1);
+	cairo_rectangle(cr,tx+extents.x_bearing-MARGIN,top-MARGIN,extents.width+2*MARGIN,extents.height+2*MARGIN);
+	cairo_fill(cr);
+	cairo_set_source_rgb(cr,0,0,0);
+	cairo_move_to(cr,tx,baseline);
+	cairo_show_text(cr,label);
+}
+
+void draw_pitch_grid(cairo_t *cr, int width, int height) {
+	cairo_set_source_rgb(cr,0,0,0);
+	cairo_set_line_width(cr,1);
+	int first_line, last_line;
+	switch (PITCH_GRID_TYPE) {
+	case 0:
+		// No grid
+		break;
+	case 1:
+		// Linear grid
+		first_line = floor(PITCH_MIN/(double)PITCH_GRID);
+		last_line = ceil(PITCH_MAX/(double)PITCH_GRID);
+		for (int i=first_line;i<=last_line;i++) {
+			pitchline(cr,width,height,i*PITCH_GRID,NULL);
+		}
+		break;
+	case 2:
+		// Fixed logarithmic grid
+		// Grid lines at 1, 2, 3, 5, 10, etc up to 50000
+		for (int i=1;i<100000;i*=10) {
+			pitchline(cr,width,height,i,NULL);
+			pitchline(cr,width,height,i*2,NULL);
+			pitchline(cr,width,height,i*3,NULL);
+			pitchline(cr,width,height,i*5,NULL);
+		}
+		break;
+	case 3:
+		// Piano keys
+		for (int i=0;i<128;i++) {
+			double freq = 440 * pow(2,(i-69)/12.);
+			char buf[20];
+			snprintf(buf,20,"%s%d",notename[i%12],i/12-1);
+			pitchline(cr,width,height,freq,buf);
+		}
+		break;
+	}
+}
+
 gboolean draw_pitch(GtkWidget *window, cairo_t *cr, gpointer dummy) {
 	int width = gtk_widget_get_allocated_width(window);
 	int height = gtk_widget_get_allocated_height(window);
 	// Clear window to white
 	cairo_set_source_rgb(cr,1,1,1);
 	cairo_paint(cr);
-	// TODO
-	/*
-	// Draw grids
-	draw_v_grid(cr,width,height);
-	draw_h_grid(cr,width,height);
-	// Work out which points of the FFT we need
-	// The first point is DC, 0Hz.
-	// Each point increases the frequency by SAMPLE_RATE/FFT_WINDOW_SIZE Hz.
-	// The last point is point FFT_WINDOW_SIZE/2, and is at the Nyquist freq, SAMPLE_RATE/2.
-	int first_point = H_MIN/(SAMPLE_RATE/(double)FFT_WINDOW_SIZE)-1;
-	int last_point = H_MAX/(SAMPLE_RATE/(double)FFT_WINDOW_SIZE)+1;
-	if (H_LOGARITHMIC) {
-		if (first_point<1) first_point = 1;
-	} else {
-		if (first_point<0) first_point = 0;
-	}
-	if (last_point>FFT_WINDOW_SIZE/2) last_point = FFT_WINDOW_SIZE/2;
-	// Plot FFT
-	for (int i=first_point;i<=last_point;i++) {
-		double freq = i*SAMPLE_RATE/(double)FFT_WINDOW_SIZE;
-		double power = pow(cabs(fft_out_buffer[i])/FFT_WINDOW_SIZE,2)*2;
-		double x,y;
-		if (H_LOGARITHMIC) {
-			x = (log(freq)-log(H_MIN))/(log(H_MAX)-log(H_MIN))*width;
+	draw_pitch_grid(cr,width,height);
+	int line_exists = 0;
+	for (int i=0;i<PITCH_POINTS;i++) {
+		double x = width * i/(double)PITCH_POINTS;
+		double y;
+		if (PITCH_LOGARITHMIC) {
+			y = height*(1-(log(pitch[i])-log(PITCH_MIN))/(log(PITCH_MAX)-log(PITCH_MIN)));
 		} else {
-			x = (freq-H_MIN)/(H_MAX-H_MIN)*width;
+			y = height*(1-(pitch[i]-PITCH_MIN)/(PITCH_MAX-PITCH_MIN));
 		}
-		if (V_LOGARITHMIC) {
-			double db = 10*log(power)/log(10);
-			y = height * (1-(db-V_LOG_MIN)/(V_LOG_MAX-V_LOG_MIN));
-		} else {
-			y = height * (1-(power-V_MIN)/(V_MAX-V_MIN));
-		}
-		if (i==first_point) cairo_move_to(cr,x,y);
-		else cairo_line_to(cr,x,y);
+		if (line_exists && clarity[i]>0) cairo_line_to(cr,x,y);
+		else if (clarity[i]>0) cairo_move_to(cr,x,y);
+		line_exists = (clarity[i]>0);
 	}
 	cairo_set_source_rgb(cr,0,0,1);
 	cairo_set_line_width(cr,2);
 	cairo_stroke(cr);
-	*/
 	return FALSE;
 }
 
@@ -331,12 +410,17 @@ void switch_tab(GtkNotebook *tabs, GtkWidget *page, guint page_num, gpointer dum
 	case MODE_FFT:
 		window_size = FFT_WINDOW_SIZE;
 		window_spacing = FFT_WINDOW_SPACING;
+		window_buffer = fft_in_buffer;
+		in_pos = 0;
 		break;
 	case MODE_PITCH:
 		window_size = PITCH_WINDOW_SIZE;
 		window_spacing = PITCH_WINDOW_SPACING;
+		window_buffer = pitch_in_buffer;
+		in_pos = 0;
 		break;
 	}
+	in_pos = 0;
 }
 
 int main(int argc, char **argv) {
@@ -351,11 +435,11 @@ int main(int argc, char **argv) {
 	g_signal_connect(tabs,"switch-page",G_CALLBACK(switch_tab),NULL);
 	gtk_container_add(GTK_CONTAINER(window),tabs);
 	// Note: the order of pages here has to match the order of MODE constants
-	GtkWidget *fft_da = gtk_drawing_area_new();
+	fft_da = gtk_drawing_area_new();
 	g_signal_connect(fft_da,"draw",G_CALLBACK(draw_fft),NULL);
 	gtk_notebook_append_page(GTK_NOTEBOOK(tabs),fft_da,NULL);
 	gtk_notebook_set_tab_label_text(GTK_NOTEBOOK(tabs),fft_da,"Spectrum");
-	GtkWidget *pitch_da = gtk_drawing_area_new();
+	pitch_da = gtk_drawing_area_new();
 	g_signal_connect(pitch_da,"draw",G_CALLBACK(draw_pitch),NULL);
 	gtk_notebook_append_page(GTK_NOTEBOOK(tabs),pitch_da,NULL);
 	gtk_notebook_set_tab_label_text(GTK_NOTEBOOK(tabs),pitch_da,"Pitch");
@@ -369,13 +453,18 @@ int main(int argc, char **argv) {
 	pa_context_connect(ctx,NULL,0,NULL);
 
 	// Set up FFT
-	fft_in_buffer = fftwf_malloc(sizeof(float)*FFT_WINDOW_SIZE);
 	fft_out_buffer = fftwf_malloc(sizeof(fftwf_complex)*(FFT_WINDOW_SIZE/2+1));
+	fft_in_buffer = fftwf_malloc(sizeof(float)*FFT_WINDOW_SIZE);
 	plan = fftwf_plan_dft_r2c_1d(FFT_WINDOW_SIZE,fft_in_buffer,fft_out_buffer,FFTW_ESTIMATE);
 
+	// Set up pitch thing
+	pitch_init();
+
+	// Set up window and mode
 	mode = MODE_FFT;
 	window_size = FFT_WINDOW_SIZE;
 	window_spacing = FFT_WINDOW_SPACING;
+	window_buffer = fft_in_buffer;
 
 	gtk_main();
 }
